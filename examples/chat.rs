@@ -30,6 +30,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::stream::{Stream, StreamExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
+//use examples::
 
 use futures::SinkExt;
 use std::collections::HashMap;
@@ -41,8 +42,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+//use std::time::SystemTime;
+//use crate::header::header::new;
+mod header;
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
+
+    //let sys_time = SystemTime::now();
+    //println!("{:?}", sys_time);
+
     // Create the shared state. This is how all the peers communicate.
     //
     // The server task will hold a handle to this. For every new client, the
@@ -77,6 +88,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
+type Tnrm = mpsc::UnboundedSender<String>;
+type Rnrm = mpsc::UnboundedReceiver<String>;
+
 /// Shorthand for the transmit half of the message channel.
 type Tx = mpsc::UnboundedSender<String>;
 
@@ -102,10 +116,16 @@ struct Peer {
     /// raw byte operations.
     lines: Framed<TcpStream, LinesCodec>,
 
+    addr: SocketAddr,
+
+    /// TRYOUT Service Type as classical TEXT --> NetReportMsg (Type = 0)
+    rnrm: Rnrm,
+
     /// Receive half of the message channel.
     ///
     /// This is used to receive messages from peers. When a message is received
     /// off of this `Rx`, it will be written to the socket.
+    /// TRYOUT Service Type as classical TEXT --> NodeMsg (Type = 1)
     rx: Rx,
 }
 
@@ -122,6 +142,7 @@ impl Shared {
     async fn broadcast(&mut self, sender: SocketAddr, message: &str) {
         for peer in self.peers.iter_mut() {
             if *peer.0 != sender {
+                let h1 = header::header::new(sender, *peer.0);      //Need to get the type for correct header and then redirect
                 let _ = peer.1.send(message.into());
             }
         }
@@ -137,14 +158,24 @@ impl Peer {
         // Get the client socket address
         let addr = lines.get_ref().peer_addr()?;
 
+        //For service type 0
+        let(tnrm, rnrm) = mpsc::unbounded_channel();
+
         // Create a channel for this peer
+        //For service type 1
         let (tx, rx) = mpsc::unbounded_channel();
 
         // Add an entry for this `Peer` in the shared state map.
         state.lock().await.peers.insert(addr, tx);
 
-        Ok(Peer { lines, rx })
+        //state.lock().await.peers.insert(addr, tnrm);
+
+        Ok(Peer { lines, addr, rnrm, rx })
+        //Ok(Peer { lines, rx })
     }
+   /* async fn get_addr()-> SocketAddr{
+        return addr;
+    }*/
 }
 
 #[derive(Debug)]
@@ -190,7 +221,7 @@ async fn process(
     stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn Error>> {
-    let mut lines = Framed::new(stream, LinesCodec::new());
+    let mut lines = Framed::new(stream, LinesCodec::new());     //Stream is here
 
     // Send a prompt to the client to enter their username.
     lines.send("Please enter your username:").await?;
@@ -204,6 +235,7 @@ async fn process(
             return Ok(());
         }
     };
+    println!("Username: {}", username);
 
     // Register our peer with state which internally sets up some channels.
     let mut peer = Peer::new(state.clone(), lines).await?;
@@ -220,12 +252,19 @@ async fn process(
     while let Some(result) = peer.next().await {
         match result {
             // A message was received from the current user, we should
-            // broadcast this message to the other users.
+            // brodcast this message to the other users.
             Ok(Message::Broadcast(msg)) => {
                 let mut state = state.lock().await;
+
+               // let h = header::new(addr, addr);
+
+
+
+
                 let msg = format!("{}: {}", username, msg);
 
                 state.broadcast(addr, &msg).await;
+                //PUT HEADER HERE?
             }
             // A message was received from a peer. Send it to the
             // current user.
@@ -254,3 +293,4 @@ async fn process(
 
     Ok(())
 }
+
